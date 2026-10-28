@@ -12,7 +12,7 @@ try:
 except Exception:
     pass  # locally there is no secrets file; .env is used instead
 
-from support_rag import answer_question, BackendError
+from support_rag import answer_question, BackendError, LLM_BACKEND, GROQ_MODEL, OLLAMA_MODEL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("support-ui")
@@ -23,6 +23,9 @@ st.caption(
     "RAG assistant that answers only from the BrewNest FAQ. "
     "Do not enter passwords, OTPs or card details."
 )
+
+model_name = GROQ_MODEL if LLM_BACKEND == "groq" else OLLAMA_MODEL
+st.caption(f"Backend: {LLM_BACKEND} | Model: {model_name}")
 
 question = st.text_area("Ask your question:", max_chars=1000, height=100)
 
@@ -43,7 +46,8 @@ if st.button("Ask"):
             st.caption(f"Response time: {ms:.0f} ms")
         except BackendError as e:
             ms = (time.perf_counter() - start) * 1000
-            log.error("ask FAILED latency_ms=%.0f reason=%s detail=%s", ms, type(e).__name__, str(e)[:250])
+            log.error("ask FAILED latency_ms=%.0f reason=%s detail=%s",
+                      ms, type(e).__name__, str(e)[:250])
             st.error("Sorry, the assistant is temporarily unavailable. Please try again later.")
         except Exception:
             log.exception("unexpected error")
