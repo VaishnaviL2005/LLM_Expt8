@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from typing import TypedDict, List
 from dotenv import load_dotenv
@@ -10,12 +11,12 @@ from langgraph.graph import StateGraph, START, END
 
 load_dotenv()
 
-# ---------- Configuration (read from .env locally, or Streamlit secrets in the cloud) ----------
+# ---------- Configuration (.env locally, Streamlit Secrets in the cloud) ----------
 LLM_BACKEND = os.getenv("LLM_BACKEND", "groq")  # "groq" or "ollama"
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")
@@ -68,33 +69,54 @@ retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"
 
 
 # ---------- LLM backend: Groq (cloud) or Ollama (local) ----------
+def clean_answer(text: str) -> str:
+    """Remove <think>...</think> reasoning text some Qwen models include."""
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL)
+    return text.strip()
+
+
+def call_groq(prompt: str) -> str:
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}",
+               "Content-Type": "application/json"}
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens": 2048,  # room for reasoning + answer
+    }
+    # First try with reasoning switched off (faster); retry without it if rejected
+    r = requests.post(GROQ_URL, headers=headers,
+                      json={**payload, "reasoning_effort": "none"}, timeout=60)
+    if r.status_code == 400:
+        r = requests.post(GROQ_URL, headers=headers, json=payload, timeout=60)
+    if r.status_code != 200:
+        raise BackendError(f"Groq HTTP {r.status_code}: {r.text[:200]}")
+    text = clean_answer(r.json()["choices"][0]["message"].get("content"))
+    if not text:
+        raise BackendError("Groq returned an empty answer")
+    return text
+
+
+def call_ollama(prompt: str) -> str:
+    r = requests.post(
+        OLLAMA_URL,
+        json={"model": OLLAMA_MODEL,
+              "messages": [{"role": "user", "content": prompt}],
+              "stream": False,
+              "options": {"temperature": 0, "num_predict": 160}},
+        timeout=120,
+    )
+    r.raise_for_status()
+    return r.json()["message"]["content"].strip()
+
+
 def call_llm(prompt: str) -> str:
     try:
         if LLM_BACKEND == "groq":
-            r = requests.post(
-                GROQ_URL,
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                         "Content-Type": "application/json"},
-                json={"model": GROQ_MODEL,
-                      "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0,
-                      "max_tokens": 160},
-                timeout=60,
-            )
-            if r.status_code != 200:
-                raise BackendError(f"Groq HTTP {r.status_code}: {r.text[:200]}")
-            return r.json()["choices"][0]["message"]["content"].strip()
-        else:  # ollama
-            r = requests.post(
-                OLLAMA_URL,
-                json={"model": OLLAMA_MODEL,
-                      "messages": [{"role": "user", "content": prompt}],
-                      "stream": False,
-                      "options": {"temperature": 0, "num_predict": 160}},
-                timeout=120,
-            )
-            r.raise_for_status()
-            return r.json()["message"]["content"].strip()
+            return call_groq(prompt)
+        return call_ollama(prompt)
+    except BackendError:
+        raise
     except Exception as e:
         raise BackendError(str(e))
 
