@@ -43,7 +43,7 @@ if st.button("Ask"):
             st.caption(f"Response time: {ms:.0f} ms")
         except BackendError as e:
             ms = (time.perf_counter() - start) * 1000
-            log.error("ask FAILED latency_ms=%.0f reason=%s", ms, type(e).__name__)
+            log.error("ask FAILED latency_ms=%.0f reason=%s detail=%s", ms, type(e).__name__, str(e)[:250])
             st.error("Sorry, the assistant is temporarily unavailable. Please try again later.")
         except Exception:
             log.exception("unexpected error")
