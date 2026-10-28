@@ -81,7 +81,8 @@ def call_llm(prompt: str) -> str:
                       "max_tokens": 160},
                 timeout=60,
             )
-            r.raise_for_status()
+            if r.status_code != 200:
+                raise BackendError(f"Groq HTTP {r.status_code}: {r.text[:200]}")
             return r.json()["choices"][0]["message"]["content"].strip()
         else:  # ollama
             r = requests.post(
